@@ -1,0 +1,111 @@
+{
+  "theme": "dark",
+  "archetype": "Custom: Editorial & Content Co-pilot",
+  "colors": {
+    "background": "#161B22",
+    "surface": "#1E2530",
+    "surface_nested": "#262E3A",
+    "text_primary": "#F3EFE6",
+    "text_secondary": "#A1A1AA",
+    "paper_cream": "#F3EFE6",
+    "paper_text": "#161B22",
+    "accent_coral": "#D9714B",
+    "accent_sage": "#8FAF9A",
+    "border": "#262E3A"
+  },
+  "typography": {
+    "headings": "'Fraunces', serif",
+    "body": "'Inter', sans-serif",
+    "mono": "'IBM Plex Mono', monospace",
+    "rules": {
+      "h1": "text-4xl md:text-5xl font-normal font-serif tracking-tight text-text_primary",
+      "h2": "text-2xl md:text-3xl font-normal font-serif tracking-tight text-text_primary",
+      "body": "text-base font-sans leading-relaxed text-text_secondary",
+      "labels": "text-xs font-mono tracking-wider uppercase"
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Generous spacing. Use p-6, p-8, p-12 for sections.",
+    "corners": "rounded-lg (8px)",
+    "shadows": "None. Use 1px solid borders for separation.",
+    "borders": "1px solid #262E3A",
+    "grid_system": "Bento grids or simple flex columns for dashboard. The drafting page is a split view: 1/3 Chat, 2/3 Draft."
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#8FAF9A] text-[#161B22] font-sans font-medium px-4 py-2 rounded-lg hover:opacity-90 transition-opacity",
+      "secondary": "bg-transparent border border-[#262E3A] text-[#F3EFE6] px-4 py-2 rounded-lg hover:bg-[#1E2530] transition-colors",
+      "attention": "bg-[#D9714B] text-[#161B22] font-sans font-medium px-4 py-2 rounded-lg hover:opacity-90 transition-opacity",
+      "copy_rules": "Plain, specific, direct. No 'Submit'. Examples: 'Publish to site', 'Save voice profile', 'Remind me later'."
+    },
+    "status_pills": {
+      "needs_attention": "border border-[#D9714B] text-[#D9714B] font-mono text-xs px-2 py-1 rounded inline-block",
+      "steady": "border border-[#8FAF9A] text-[#8FAF9A] font-mono text-xs px-2 py-1 rounded inline-block"
+    },
+    "cards": {
+      "base": "bg-[#1E2530] border border-[#262E3A] rounded-lg p-6",
+      "hover": "hover:bg-[#262E3A] transition-colors duration-200"
+    },
+    "draft_panel": {
+      "description": "The hero interaction. Looks like a printed page or notebook.",
+      "styles": "bg-[#F3EFE6] text-[#161B22] rounded-lg p-8 md:p-12 font-sans shadow-none h-full overflow-y-auto"
+    }
+  },
+  "pages": {
+    "onboarding": {
+      "layout": "Centered, narrow max-width container. Step-by-step.",
+      "features": "Paste/upload samples area, 'what do you write about and who for' text area. Voice summary confirmation screen.",
+      "tone": "Warm, intellectual. Big Fraunces headings. Use paper cream bg for text areas."
+    },
+    "dashboard": {
+      "layout": "Grid or list view for drafts. Minimal calendar.",
+      "features": "Prominent 'New draft' button. List items show status pills (IBM Plex Mono). Empty state: 'Write your first draft.', not an apology.",
+      "tone": "Dry, organized, calm."
+    },
+    "brainstorm_draft": {
+      "layout": "Split screen. Left: Chat/Co-pilot (bg: surface). Right: Draft Panel (bg: paper_cream).",
+      "features": "Live updating text. Chat feels like messaging an editor.",
+      "tone": "Focused, functional, like a writing room."
+    },
+    "review_publish": {
+      "layout": "Centered review screen.",
+      "features": "Stacked preview and actions. Buttons: 'Publish to site' (Sage), 'Remind me later' (Secondary).",
+      "tone": "Final, confident."
+    },
+    "settings": {
+      "layout": "Simple list of sections in a narrow container.",
+      "features": "Manage connected Sanity project, notification preferences, voice profile editor.",
+      "tone": "Utility."
+    }
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.pexels.com/photos/9572404/pexels-photo-9572404.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "onboarding_background",
+        "description": "Workspace with typewriter, for editorial empty state or onboarding ambiance if needed."
+      },
+      {
+        "url": "https://images.pexels.com/photos/11951275/pexels-photo-11951275.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "avatar",
+        "description": "Artistic black and white portrait for the solo expert's profile picture."
+      }
+    ],
+    "icons": "lucide-react for minimal, stroke-based icons. Use at 1.5px stroke width."
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure text on paper_cream has high contrast. Ensure text on background has high contrast.",
+    "testing": "All interactive elements MUST have data-testid attributes (kebab-case, role-based)."
+  },
+  "instructions_to_main_agent": [
+    "Extend tailwind.config.js with the custom colors provided in the colors section.",
+    "Import Fraunces, Inter, and IBM Plex Mono fonts in your index.css.",
+    "Keep rounded corners consistently at 8px (rounded-lg).",
+    "Avoid box-shadow utilities; instead, rely on 1px solid borders (#262E3A) for depth and separation.",
+    "For the main drafting panel on the brainstorm page, make the background paper cream (#F3EFE6) with dark ink text (#161B22) to simulate a notebook page.",
+    "Use exact, plain, specific copy for buttons (e.g., 'Publish to site', 'New draft'). No generic 'Submit' buttons.",
+    "Status pills MUST be styled using the coral (#D9714B) for needs attention/drafting, and sage (#8FAF9A) for ready/published.",
+    "Empty states should invite action without apologizing.",
+    "Add 'data-testid' to all buttons, links, and forms for testability."
+  ]
+}
