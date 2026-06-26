@@ -76,39 +76,48 @@ def decode_jwt(token: str) -> Optional[str]:
         return None
 
 
+def _extract_token(authorization: Optional[str], session_token: Optional[str]) -> Optional[str]:
+    if session_token:
+        return session_token
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(None, 1)[1].strip()
+    return None
+
+
+def _session_is_active(sess: dict) -> bool:
+    expires_at = sess.get("expires_at")
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return bool(expires_at and expires_at >= now_utc())
+
+
+async def _user_from_session_token(token: str) -> Optional[dict]:
+    sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not sess or not _session_is_active(sess):
+        return None
+    return await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
+
+
+async def _user_from_jwt(token: str) -> Optional[dict]:
+    uid = decode_jwt(token)
+    if not uid:
+        return None
+    return await db.users.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
+
+
 async def get_current_user(
     request: Request,
     authorization: Optional[str] = Header(default=None),
     session_token: Optional[str] = Cookie(default=None),
 ) -> dict:
-    """Resolve current user from session_token cookie, Authorization header, or jwt cookie/header."""
-    # 1) emergent session token (cookie or header bearer)
-    token = None
-    if session_token:
-        token = session_token
-    elif authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(None, 1)[1].strip()
-
+    """Resolve current user from session_token cookie, Authorization header, or JWT."""
+    token = _extract_token(authorization, session_token)
     if token:
-        sess = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
-        if sess:
-            expires_at = sess["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at)
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if expires_at >= now_utc():
-                user = await db.users.find_one({"user_id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
-                if user:
-                    return user
-
-        # 2) try JWT decode
-        uid = decode_jwt(token)
-        if uid:
-            user = await db.users.find_one({"user_id": uid}, {"_id": 0, "password_hash": 0})
-            if user:
-                return user
-
+        user = await _user_from_session_token(token) or await _user_from_jwt(token)
+        if user:
+            return user
     raise HTTPException(status_code=401, detail="Not authenticated")
 
 
@@ -202,20 +211,18 @@ async def login(body: LoginIn, response: Response):
     return {"token": token, "user": user}
 
 
-@api.post("/auth/session")
-async def session_exchange(request: Request, response: Response):
-    """Exchange Emergent OAuth session_id for our session_token cookie + user."""
-    session_id = request.headers.get("X-Session-ID") or (await request.json()).get("session_id") if request.headers.get("content-type", "").startswith("application/json") else request.headers.get("X-Session-ID")
-    if not session_id:
-        # fallback parsing
-        try:
-            body = await request.json()
-            session_id = body.get("session_id")
-        except Exception:
-            session_id = None
-    if not session_id:
-        raise HTTPException(status_code=400, detail="Missing session_id")
+async def _read_session_id(request: Request) -> Optional[str]:
+    sid = request.headers.get("X-Session-ID")
+    if sid:
+        return sid
+    try:
+        body = await request.json()
+        return body.get("session_id")
+    except Exception:
+        return None
 
+
+async def _fetch_oauth_session_data(session_id: str) -> dict:
     async with httpx.AsyncClient(timeout=15) as hc:
         r = await hc.get(
             "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
@@ -223,37 +230,55 @@ async def session_exchange(request: Request, response: Response):
         )
     if r.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid session")
-    data = r.json()
+    return r.json()
+
+
+async def _upsert_oauth_user(data: dict) -> dict:
     email = (data.get("email") or "").lower()
     if not email:
         raise HTTPException(status_code=400, detail="No email returned")
-
     user = await db.users.find_one({"email": email}, {"_id": 0})
-    if not user:
-        user = {
-            "user_id": new_id("user_"),
-            "email": email,
-            "name": data.get("name") or email.split("@")[0],
-            "picture": data.get("picture"),
-            "password_hash": None,
-            "plan_tier": "starter",
-            "onboarded": False,
-            "created_at": now_utc().isoformat(),
-        }
-        await db.users.insert_one(user)
+    if user:
+        return user
+    user = {
+        "user_id": new_id("user_"),
+        "email": email,
+        "name": data.get("name") or email.split("@")[0],
+        "picture": data.get("picture"),
+        "password_hash": None,
+        "plan_tier": "starter",
+        "onboarded": False,
+        "created_at": now_utc().isoformat(),
+    }
+    await db.users.insert_one(user)
+    user.pop("_id", None)
+    return user
 
-    session_token = data["session_token"]
+
+async def _store_oauth_session(user_id: str, session_token: str) -> None:
     expires_at = now_utc() + timedelta(days=7)
     await db.user_sessions.insert_one({
-        "user_id": user["user_id"],
+        "user_id": user_id,
         "session_token": session_token,
         "created_at": now_utc().isoformat(),
         "expires_at": expires_at.isoformat(),
     })
 
+
+@api.post("/auth/session")
+async def session_exchange(request: Request, response: Response):
+    """Exchange Emergent OAuth session_id for our session_token cookie + user."""
+    session_id = await _read_session_id(request)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id")
+
+    data = await _fetch_oauth_session_data(session_id)
+    user = await _upsert_oauth_user(data)
+    session_token = data["session_token"]
+    await _store_oauth_session(user["user_id"], session_token)
+
     response.set_cookie("session_token", session_token, httponly=True, secure=True, samesite="none", path="/", max_age=60 * 60 * 24 * 7)
     user.pop("password_hash", None)
-    user.pop("_id", None)
     return {"user": user}
 
 
@@ -503,6 +528,39 @@ async def get_messages(draft_id: str, user=Depends(get_current_user)):
     return msgs
 
 
+import re as _re
+
+
+async def _save_user_message(draft_id: str, content: str) -> None:
+    await db.chat_messages.insert_one({
+        "id": new_id("m_"),
+        "draft_id": draft_id,
+        "role": "user",
+        "content": content,
+        "created_at": now_utc().isoformat(),
+    })
+
+
+async def _apply_draft_block(draft_id: str, draft_block: dict) -> None:
+    update = {"updated_at": now_utc().isoformat()}
+    if draft_block.get("title"):
+        update["title"] = draft_block["title"]
+    if draft_block.get("body"):
+        update["body"] = draft_block["body"]
+    await db.drafts.update_one({"id": draft_id}, {"$set": update})
+
+
+async def _persist_assistant_message(draft_id: str, visible_chat: str, produced_draft: bool) -> None:
+    await db.chat_messages.insert_one({
+        "id": new_id("m_"),
+        "draft_id": draft_id,
+        "role": "assistant",
+        "content": visible_chat or "(updated the draft)",
+        "produced_draft": produced_draft,
+        "created_at": now_utc().isoformat(),
+    })
+
+
 @api.post("/drafts/{draft_id}/chat")
 async def chat(draft_id: str, body: ChatIn, user=Depends(get_current_user)):
     """Stream Claude response via SSE. After stream, extract <draft> block, update draft body."""
@@ -514,17 +572,8 @@ async def chat(draft_id: str, body: ChatIn, user=Depends(get_current_user)):
     style_summary = profile.get("style_summary") if profile else None
     system_msg = _build_chat_system(style_summary, draft.get("body", ""))
 
-    # save user message
-    user_msg_doc = {
-        "id": new_id("m_"),
-        "draft_id": draft_id,
-        "role": "user",
-        "content": body.message,
-        "created_at": now_utc().isoformat(),
-    }
-    await db.chat_messages.insert_one(user_msg_doc)
+    await _save_user_message(draft_id, body.message)
 
-    # build history (just user/assistant turns; reuse same session_id for stateless emergentintegrations call)
     chat_session = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"draft_{draft_id}",
@@ -548,24 +597,10 @@ async def chat(draft_id: str, body: ChatIn, user=Depends(get_current_user)):
         draft_block = _extract_draft_block(full_text)
         visible_chat = full_text
         if draft_block:
-            import re
-            visible_chat = re.sub(r"<draft>[\s\S]*?</draft>", "", full_text, flags=re.IGNORECASE).strip()
-            update = {"updated_at": now_utc().isoformat()}
-            if draft_block.get("title"):
-                update["title"] = draft_block["title"]
-            if draft_block.get("body"):
-                update["body"] = draft_block["body"]
-            await db.drafts.update_one({"id": draft_id}, {"$set": update})
+            visible_chat = _re.sub(r"<draft>[\s\S]*?</draft>", "", full_text, flags=_re.IGNORECASE).strip()
+            await _apply_draft_block(draft_id, draft_block)
 
-        assistant_doc = {
-            "id": new_id("m_"),
-            "draft_id": draft_id,
-            "role": "assistant",
-            "content": visible_chat or "(updated the draft)",
-            "produced_draft": bool(draft_block),
-            "created_at": now_utc().isoformat(),
-        }
-        await db.chat_messages.insert_one(assistant_doc)
+        await _persist_assistant_message(draft_id, visible_chat, bool(draft_block))
 
         payload = {"done": True, "produced_draft": bool(draft_block)}
         if draft_block:

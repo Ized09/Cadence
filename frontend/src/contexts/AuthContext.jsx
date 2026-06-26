@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import api from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -11,7 +11,11 @@ export function AuthProvider({ children }) {
     try {
       const r = await api.get("/auth/me");
       setUser(r.data);
-    } catch {
+    } catch (err) {
+      // expected when there's no session yet
+      if (err?.response?.status !== 401) {
+        console.warn("auth check failed", err);
+      }
       setUser(null);
     } finally {
       setLoading(false);
@@ -27,31 +31,33 @@ export function AuthProvider({ children }) {
     checkAuth();
   }, [checkAuth]);
 
-  const login = async (email, password) => {
+  const login = useCallback(async (email, password) => {
     const r = await api.post("/auth/login", { email, password });
-    localStorage.setItem("cadence_token", r.data.token);
     setUser(r.data.user);
     return r.data.user;
-  };
+  }, []);
 
-  const register = async (email, password, name) => {
+  const register = useCallback(async (email, password, name) => {
     const r = await api.post("/auth/register", { email, password, name });
-    localStorage.setItem("cadence_token", r.data.token);
     setUser(r.data.user);
     return r.data.user;
-  };
+  }, []);
 
-  const logout = async () => {
-    try { await api.post("/auth/logout"); } catch {}
-    localStorage.removeItem("cadence_token");
+  const logout = useCallback(async () => {
+    try {
+      await api.post("/auth/logout");
+    } catch (err) {
+      console.warn("logout request failed (continuing)", err);
+    }
     setUser(null);
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, setUser, loading, login, register, logout, refresh: checkAuth }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, setUser, loading, login, register, logout, refresh: checkAuth }),
+    [user, loading, login, register, logout, checkAuth],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Nav from "@/components/Nav";
 import StatusPill from "@/components/StatusPill";
@@ -13,45 +13,122 @@ function formatDate(iso) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-export default function Dashboard() {
+function DraftsSection({ status, list }) {
+  if (list.length === 0) return null;
+  return (
+    <section>
+      <div className="label-mono mb-3">{status.toUpperCase()} · {list.length}</div>
+      <div className="surface divide-soft" data-testid={`section-${status}`}>
+        {list.map((d) => (
+          <Link
+            key={d.id}
+            to={`/draft/${d.id}`}
+            data-testid={`draft-row-${d.id}`}
+            className="flex items-center justify-between p-5 hover:bg-ink-700 transition-colors"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-paper font-medium truncate">{d.title || "Untitled draft"}</div>
+              <div className="label-mono mt-1 normal-case tracking-normal text-text-dim">
+                {d.body ? `${d.body.split(/\s+/).filter(Boolean).length} words` : "empty"}
+                {" · "}
+                Updated {formatDate(d.updated_at)}
+                {d.published_at && <> · Published {formatDate(d.published_at)}</>}
+              </div>
+            </div>
+            <StatusPill status={d.status} />
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function UpcomingNudges({ reminders, drafts }) {
+  const upcoming = reminders.filter((r) => !r.sent_at).slice(0, 5);
+  if (upcoming.length === 0) {
+    return <div className="text-sm text-text-dim">No nudges scheduled.</div>;
+  }
+  return upcoming.map((r) => {
+    const d = drafts.find((x) => x.id === r.draft_id);
+    return (
+      <div key={r.id} className="text-sm text-text-secondary py-2 flex justify-between gap-3">
+        <span className="truncate">{d?.title || "Draft"}</span>
+        <span className="font-mono text-xs text-coral whitespace-nowrap">{formatDate(r.scheduled_for)}</span>
+      </div>
+    );
+  });
+}
+
+function EmptyState({ onNew }) {
+  return (
+    <div className="surface p-10 text-center" data-testid="empty-drafts">
+      <div className="font-serif text-2xl text-paper mb-2">A blank desk.</div>
+      <p className="text-text-secondary mb-6">Start your first draft — bring a topic, a half-formed thought, anything.</p>
+      <button onClick={onNew} className="btn-primary inline-flex items-center gap-2"><Plus size={16} /> New draft</button>
+    </div>
+  );
+}
+
+const MARKED_MODIFIER_CLASSES = {
+  marked: "after:content-[''] after:absolute after:bottom-1 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:rounded-full after:bg-coral relative",
+};
+
+function useDashboardData() {
   const [drafts, setDrafts] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(new Date());
-  const nav = useNavigate();
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [d, r] = await Promise.all([api.get("/drafts"), api.get("/reminders")]);
       setDrafts(d.data);
       setReminders(r.data);
-    } finally { setLoading(false); }
-  };
+    } catch (err) {
+      console.error("dashboard load failed", err);
+      toast.error("Couldn't load drafts.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
 
-  const newDraft = async () => {
+  return { drafts, reminders, loading, reload: load };
+}
+
+export default function Dashboard() {
+  const { drafts, reminders, loading } = useDashboardData();
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const nav = useNavigate();
+
+  const newDraft = useCallback(async () => {
     try {
       const r = await api.post("/drafts", { title: "", body: "" });
       nav(`/draft/${r.data.id}`);
     } catch (e) {
+      console.error("create draft failed", e);
       toast.error(e?.response?.data?.detail || "Couldn't create draft.");
     }
-  };
+  }, [nav]);
 
   const dateMarks = useMemo(() => {
     const set = new Set();
-    drafts.forEach(d => { if (d.published_at) set.add(new Date(d.published_at).toDateString()); });
-    reminders.forEach(r => { set.add(new Date(r.scheduled_for).toDateString()); });
+    drafts.forEach((d) => { if (d.published_at) set.add(new Date(d.published_at).toDateString()); });
+    reminders.forEach((r) => { set.add(new Date(r.scheduled_for).toDateString()); });
     return set;
   }, [drafts, reminders]);
 
-  const sectioned = {
-    drafting: drafts.filter(d => d.status === "drafting"),
-    ready: drafts.filter(d => d.status === "ready"),
-    published: drafts.filter(d => d.status === "published"),
-  };
+  const modifiers = useMemo(
+    () => ({ marked: (date) => dateMarks.has(date.toDateString()) }),
+    [dateMarks],
+  );
+
+  const sectioned = useMemo(() => ({
+    drafting: drafts.filter((d) => d.status === "drafting"),
+    ready: drafts.filter((d) => d.status === "ready"),
+    published: drafts.filter((d) => d.status === "published"),
+  }), [drafts]);
 
   return (
     <div className="min-h-screen">
@@ -69,53 +146,18 @@ export default function Dashboard() {
         </div>
 
         <div className="grid lg:grid-cols-3 gap-8">
-          {/* drafts list */}
           <div className="lg:col-span-2 space-y-10">
             {loading ? (
               <div className="label-mono">Loading…</div>
             ) : drafts.length === 0 ? (
-              <div className="surface p-10 text-center" data-testid="empty-drafts">
-                <div className="font-serif text-2xl text-paper mb-2">A blank desk.</div>
-                <p className="text-text-secondary mb-6">Start your first draft — bring a topic, a half-formed thought, anything.</p>
-                <button onClick={newDraft} className="btn-primary inline-flex items-center gap-2"><Plus size={16} /> New draft</button>
-              </div>
+              <EmptyState onNew={newDraft} />
             ) : (
-              <>
-                {["drafting", "ready", "published"].map((status) => {
-                  const list = sectioned[status];
-                  if (list.length === 0) return null;
-                  return (
-                    <section key={status}>
-                      <div className="label-mono mb-3">{status.toUpperCase()} · {list.length}</div>
-                      <div className="surface divide-soft" data-testid={`section-${status}`}>
-                        {list.map((d) => (
-                          <Link
-                            key={d.id}
-                            to={d.status === "published" ? `/draft/${d.id}` : `/draft/${d.id}`}
-                            data-testid={`draft-row-${d.id}`}
-                            className="flex items-center justify-between p-5 hover:bg-ink-700 transition-colors"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="text-paper font-medium truncate">{d.title || "Untitled draft"}</div>
-                              <div className="label-mono mt-1 normal-case tracking-normal text-text-dim">
-                                {d.body ? `${d.body.split(/\s+/).filter(Boolean).length} words` : "empty"}
-                                {" · "}
-                                Updated {formatDate(d.updated_at)}
-                                {d.published_at && <> · Published {formatDate(d.published_at)}</>}
-                              </div>
-                            </div>
-                            <StatusPill status={d.status} />
-                          </Link>
-                        ))}
-                      </div>
-                    </section>
-                  );
-                })}
-              </>
+              ["drafting", "ready", "published"].map((status) => (
+                <DraftsSection key={status} status={status} list={sectioned[status]} />
+              ))
             )}
           </div>
 
-          {/* calendar */}
           <aside>
             <div className="surface p-5">
               <div className="flex items-center gap-2 mb-4">
@@ -126,24 +168,13 @@ export default function Dashboard() {
                 mode="single"
                 selected={selectedDate}
                 onSelect={setSelectedDate}
-                modifiers={{ marked: (date) => dateMarks.has(date.toDateString()) }}
-                modifiersClassNames={{ marked: "after:content-[''] after:absolute after:bottom-1 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:rounded-full after:bg-coral relative" }}
+                modifiers={modifiers}
+                modifiersClassNames={MARKED_MODIFIER_CLASSES}
                 className="bg-transparent"
               />
               <div className="mt-5 pt-5 border-t border-ink-700">
                 <div className="label-mono mb-2">UPCOMING NUDGES</div>
-                {reminders.filter(r => !r.sent_at).slice(0, 5).map((r) => {
-                  const d = drafts.find(x => x.id === r.draft_id);
-                  return (
-                    <div key={r.id} className="text-sm text-text-secondary py-2 flex justify-between gap-3">
-                      <span className="truncate">{d?.title || "Draft"}</span>
-                      <span className="font-mono text-xs text-coral whitespace-nowrap">{formatDate(r.scheduled_for)}</span>
-                    </div>
-                  );
-                })}
-                {reminders.filter(r => !r.sent_at).length === 0 && (
-                  <div className="text-sm text-text-dim">No nudges scheduled.</div>
-                )}
+                <UpcomingNudges reminders={reminders} drafts={drafts} />
               </div>
             </div>
           </aside>

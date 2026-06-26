@@ -15,9 +15,19 @@ import Draft from "@/pages/Draft";
 import Review from "@/pages/Review";
 import Settings from "@/pages/Settings";
 
+const TOASTER_OPTIONS = {
+  style: {
+    background: "#1E2530",
+    border: "1px solid #262E3A",
+    color: "#F3EFE6",
+    fontFamily: "Inter, sans-serif",
+    fontSize: "14px",
+    borderRadius: "8px",
+  },
+};
+
 function AppRouter() {
   const location = useLocation();
-  // Intercept session_id from hash anywhere
   if (location.hash?.includes("session_id=")) {
     return <AuthCallback />;
   }
@@ -41,19 +51,7 @@ export default function App() {
       <BrowserRouter>
         <AuthProvider>
           <AppRouter />
-          <Toaster
-            position="bottom-right"
-            toastOptions={{
-              style: {
-                background: "#1E2530",
-                border: "1px solid #262E3A",
-                color: "#F3EFE6",
-                fontFamily: "Inter, sans-serif",
-                fontSize: "14px",
-                borderRadius: "8px",
-              },
-            }}
-          />
+          <Toaster position="bottom-right" toastOptions={TOASTER_OPTIONS} />
         </AuthProvider>
       </BrowserRouter>
     </div>
