@@ -1,0 +1,8 @@
+{
+  "name": "cadence-root",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "vercel-build": "cd frontend && yarn install --frozen-lockfile || yarn install && yarn build"
+  }
+}
