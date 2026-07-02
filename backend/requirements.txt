@@ -1,4 +1,5 @@
 aiohappyeyeballs==2.6.2
+anthropic
 aiohttp==3.14.1
 aiosignal==1.4.0
 annotated-doc==0.0.4

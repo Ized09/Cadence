@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+from anthropic import Anthropic
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -26,7 +26,7 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
 DEFAULT_SANITY_TOKEN = os.environ.get("DEFAULT_SANITY_TOKEN", "")
@@ -339,24 +339,21 @@ Total length: 180-260 words."""
 
 async def _claude_summarize(samples_text: str, audience_note: Optional[str]) -> str:
     """Generate voice profile summary using Claude."""
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=new_id("voice_"),
-        system_message=VOICE_PROFILE_SYSTEM,
-    ).with_model("anthropic", "claude-sonnet-4-6")
+    anthropic_client = Anthropic(api_key=CLAUDE_API_KEY)
 
     prompt = f"Writing samples (separated by ---):\n\n{samples_text}"
     if audience_note:
         prompt += f"\n\nWriter's note about audience & topics: {audience_note}"
     prompt += "\n\nWrite the style summary now."
 
-    out = []
-    async for ev in chat.stream_message(UserMessage(text=prompt)):
-        if isinstance(ev, TextDelta):
-            out.append(ev.content)
-        elif isinstance(ev, StreamDone):
-            break
-    return "".join(out).strip()
+    response = await asyncio.to_thread(
+        anthropic_client.messages.create,
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        system=VOICE_PROFILE_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
 
 
 @api.post("/voice/profile/generate")
@@ -388,20 +385,17 @@ async def refine_profile(body: VoiceProfileRefineIn, user=Depends(get_current_us
     if not profile:
         raise HTTPException(status_code=400, detail="No voice profile yet")
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=new_id("refine_"),
-        system_message="You revise a writer's style-summary based on plain-language feedback. Output ONLY the revised summary (no preamble).",
-    ).with_model("anthropic", "claude-sonnet-4-6")
+    anthropic_client = Anthropic(api_key=CLAUDE_API_KEY)
 
     prompt = f"Current style summary:\n\n{profile['style_summary']}\n\nFeedback: {body.instruction}\n\nRewrite the summary applying this feedback. Keep the same five-section format and roughly the same length."
-    out = []
-    async for ev in chat.stream_message(UserMessage(text=prompt)):
-        if isinstance(ev, TextDelta):
-            out.append(ev.content)
-        elif isinstance(ev, StreamDone):
-            break
-    new_summary = "".join(out).strip()
+    response = await asyncio.to_thread(
+        anthropic_client.messages.create,
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        system="You revise a writer's style-summary based on plain-language feedback. Output ONLY the revised summary (no preamble).",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    new_summary = response.content[0].text.strip()
 
     profile["style_summary"] = new_summary
     profile["last_updated"] = now_utc().isoformat()
@@ -574,24 +568,54 @@ async def chat(draft_id: str, body: ChatIn, user=Depends(get_current_user)):
 
     await _save_user_message(draft_id, body.message)
 
-    chat_session = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"draft_{draft_id}",
-        system_message=system_msg,
-    ).with_model("anthropic", "claude-sonnet-4-6")
+    anthropic_client = Anthropic(api_key=CLAUDE_API_KEY)
+
+    # Build conversation history from stored messages for context
+    stored_msgs = await db.chat_messages.find({"draft_id": draft_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    conversation: list = []
+    for m in stored_msgs:
+        role = m.get("role")
+        if role in ("user", "assistant"):
+            conversation.append({"role": role, "content": m["content"]})
 
     async def event_gen():
         full = []
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _stream_in_thread():
+            try:
+                with anthropic_client.messages.stream(
+                    model="claude-sonnet-4-5",
+                    max_tokens=4096,
+                    system=system_msg,
+                    messages=conversation,
+                ) as stream:
+                    for text in stream.text_stream:
+                        queue.put_nowait(("delta", text))
+                queue.put_nowait(("done", None))
+            except Exception as exc:
+                queue.put_nowait(("error", str(exc)))
+
+        loop = asyncio.get_event_loop()
+        thread_future = loop.run_in_executor(None, _stream_in_thread)
+
         try:
-            async for ev in chat_session.stream_message(UserMessage(text=body.message)):
-                if isinstance(ev, TextDelta):
-                    full.append(ev.content)
-                    yield f"data: {json.dumps({'delta': ev.content})}\n\n"
-                elif isinstance(ev, StreamDone):
+            while True:
+                kind, value = await queue.get()
+                if kind == "delta":
+                    full.append(value)
+                    yield f"data: {json.dumps({'delta': value})}\n\n"
+                elif kind == "done":
+                    break
+                elif kind == "error":
+                    logger.error("chat stream failed: %s", value)
+                    yield f"data: {json.dumps({'error': value})}\n\n"
                     break
         except Exception as e:
             logger.exception("chat stream failed")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+        await thread_future
 
         full_text = "".join(full)
         draft_block = _extract_draft_block(full_text)
