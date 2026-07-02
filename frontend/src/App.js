@@ -2,6 +2,7 @@ import React from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -52,6 +53,7 @@ export default function App() {
         <AuthProvider>
           <AppRouter />
           <Toaster position="bottom-right" toastOptions={TOASTER_OPTIONS} />
+          <SpeedInsights />
         </AuthProvider>
       </BrowserRouter>
     </div>
