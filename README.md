@@ -129,4 +129,4 @@ The product uses a dark editorial style (Fraunces serif for titles, Inter for UI
 - Run frontend eslint and backend linters before PRs; include tests where helpful.
 
 ## License
-No license
+MIT license
